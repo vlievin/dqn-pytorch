@@ -5,6 +5,7 @@ import math
 import random
 import numpy as np 
 import time
+import logging
 
 import gym
 
@@ -117,8 +118,8 @@ def train(env, n_episodes, render=False):
 
             if done:
                 break
-        if episode % 20 == 0:
-                print('Total steps: {} \t Episode: {}/{} \t Total reward: {}'.format(steps_done, episode, t, total_reward))
+        if episode % 5 == 0:
+                logger.info('Total steps: {} \t Episode: {}/{} \t Total reward: {}'.format(steps_done, episode, t, total_reward))
     env.close()
     return
 
@@ -147,13 +148,21 @@ def test(env, n_episodes, policy, render=True):
             state = next_state
 
             if done:
-                print("Finished Episode {} with reward {}".format(episode, total_reward))
+                logger.info("Finished Episode {} with reward {}".format(episode, total_reward))
                 break
 
     env.close()
     return
 
 if __name__ == '__main__':
+    # logging
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(name)-4s %(levelname)-4s %(message)s',
+                        datefmt='%m-%d %H:%M',
+                        handlers=[logging.FileHandler('dqn.log'),
+                                  logging.StreamHandler()])
+    logger = logging.getLogger('dqn-training')
+
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -170,8 +179,8 @@ if __name__ == '__main__':
     MEMORY_SIZE = 10 * INITIAL_MEMORY
 
     # create networks
-    policy_net = DQN(n_actions=4).to(device)
-    target_net = DQN(n_actions=4).to(device)
+    policy_net = DQNbn(n_actions=4).to(device)
+    target_net = DQNbn(n_actions=4).to(device)
     target_net.load_state_dict(policy_net.state_dict())
 
     # setup optimizer
@@ -187,7 +196,7 @@ if __name__ == '__main__':
     memory = ReplayMemory(MEMORY_SIZE)
     
     # train model
-    train(env, 400)
+    train(env, 100000)
     torch.save(policy_net, "dqn_pong_model")
     policy_net = torch.load("dqn_pong_model")
     test(env, 1, policy_net, render=False)
