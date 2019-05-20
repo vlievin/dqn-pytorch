@@ -6,6 +6,8 @@ import random
 import numpy as np 
 import time
 import logging
+import argparse
+from tqdm import tqdm
 
 import gym
 
@@ -36,7 +38,7 @@ def select_action(state):
         return torch.tensor([[random.randrange(4)]], device=device, dtype=torch.long)
 
     
-def optimize_model():
+def optimize_model(double_dqn):
     if len(memory) < BATCH_SIZE:
         return
     transitions = memory.sample(BATCH_SIZE)
@@ -51,14 +53,11 @@ def optimize_model():
     batch = Transition(*zip(*transitions))
     
     actions = tuple((map(lambda a: torch.tensor([[a]], device='cuda'), batch.action))) 
-    rewards = tuple((map(lambda r: torch.tensor([r], device='cuda'), batch.reward))) 
+    rewards = tuple((map(lambda r: torch.tensor([r], device='cuda'), batch.reward)))
 
-    non_final_mask = torch.tensor(
-        tuple(map(lambda s: s is not None, batch.next_state)),
-        device=device, dtype=torch.uint8)
+    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=device, dtype=torch.uint8)
     
-    non_final_next_states = torch.cat([s for s in batch.next_state
-                                       if s is not None]).to('cuda')
+    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None]).to('cuda')
     
 
     state_batch = torch.cat(batch.state).to('cuda')
@@ -68,8 +67,16 @@ def optimize_model():
     state_action_values = policy_net(state_batch).gather(1, action_batch)
     
     next_state_values = torch.zeros(BATCH_SIZE, device=device)
-    next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
-    expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+
+    # double DQN
+    if double_dqn:
+        argmax_next_state_values = policy_net(non_final_next_states).argmax(1).detach().unsqueeze(1)
+        next_state_values[non_final_mask] = target_net(non_final_next_states).gather(1, argmax_next_state_values).detach().squeeze()
+
+        expected_state_action_values = (next_state_values * GAMMA) + reward_batch
+    else:
+        next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
+        expected_state_action_values = (next_state_values * GAMMA) + reward_batch
     
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
     
@@ -85,12 +92,16 @@ def get_state(obs):
     state = torch.from_numpy(state)
     return state.unsqueeze(0)
 
-def train(env, n_episodes, render=False):
-    for episode in range(n_episodes):
+def train(env, n_episodes, render=False, double_dqn=False):
+    for episode in tqdm(range(n_episodes)):
         obs = env.reset()
         state = get_state(obs)
         total_reward = 0.0
+        elaps = time.time()
+        frames = 0
         for t in count():
+
+            frames += 1
             action = select_action(state)
 
             if render:
@@ -111,7 +122,7 @@ def train(env, n_episodes, render=False):
             state = next_state
 
             if steps_done > INITIAL_MEMORY:
-                optimize_model()
+                optimize_model(double_dqn)
 
                 if steps_done % TARGET_UPDATE == 0:
                     target_net.load_state_dict(policy_net.state_dict())
@@ -119,12 +130,13 @@ def train(env, n_episodes, render=False):
             if done:
                 break
         if episode % 5 == 0:
-                logger.info('Total steps: {} \t Episode: {}/{} \t Total reward: {}'.format(steps_done, episode, t, total_reward))
+                frames_seconds = frames/(time.time() - elaps)
+                logger.info(f'Total steps: {steps_done} \t Episode: {episode}/{t} \t Total reward: {total_reward}  Fps {frames_seconds:.3f}')
     env.close()
     return
 
-def test(env, n_episodes, policy, render=True):
-    env = gym.wrappers.Monitor(env, './videos/' + 'dqn_pong_video')
+def test(env, n_episodes, policy, logdir, render=True):
+    env = gym.wrappers.Monitor(env, logdir, force=True)
     for episode in range(n_episodes):
         obs = env.reset()
         state = get_state(obs)
@@ -155,28 +167,47 @@ def test(env, n_episodes, policy, render=True):
     return
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--version', default='1', help='version')
+    parser.add_argument('--env', default="PongNoFrameskip-v4", help='gym env')
+    parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
+    parser.add_argument('--batch_size', type=int, default='32', help='batch size')
+    parser.add_argument('--memory_size', type=int, default='100000', help='memory size')
+    parser.add_argument('--target_update_freq', type=int, default='1000', help='number of episodes before each target update')
+    parser.add_argument('--double', action='store_true', help='use double DQN')
+    parser.add_argument('--gamma', type=float, default=0.99, help='gamma parameter')
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
+
+    opt = parser.parse_args()
+
+    run_id = f"{'DoubleDQN' if opt.double else 'DQN'}-{opt.env}-{opt.version}-{opt.batch_size}-{opt.gamma}-{opt.lr}"
+
     # logging
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(name)-4s %(levelname)-4s %(message)s',
                         datefmt='%m-%d %H:%M',
-                        handlers=[logging.FileHandler('dqn.log'),
+                        handlers=[logging.FileHandler(f"logs/{run_id}.log"),
                                   logging.StreamHandler()])
-    logger = logging.getLogger('dqn-training')
+    logger = logging.getLogger(run_id)
 
     # set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     # hyperparameters
-    BATCH_SIZE = 32
-    GAMMA = 0.99
+    BATCH_SIZE = opt.batch_size
+    GAMMA = opt.gamma
     EPS_START = 1
     EPS_END = 0.02
     EPS_DECAY = 1000000
-    TARGET_UPDATE = 1000
+    TARGET_UPDATE = opt.target_update_freq
     RENDER = False
-    lr = 1e-4
+    lr = opt.lr
     INITIAL_MEMORY = 10000
-    MEMORY_SIZE = 10 * INITIAL_MEMORY
+    MEMORY_SIZE = opt.memory_size
 
     # create networks
     policy_net = DQNbn(n_actions=4).to(device)
@@ -189,15 +220,16 @@ if __name__ == '__main__':
     steps_done = 0
 
     # create environment
-    env = gym.make("PongNoFrameskip-v4")
+    env = gym.make(opt.env)
     env = make_env(env)
 
     # initialize replay memory
     memory = ReplayMemory(MEMORY_SIZE)
     
     # train model
-    train(env, 100000)
-    torch.save(policy_net, "dqn_pong_model")
-    policy_net = torch.load("dqn_pong_model")
-    test(env, 1, policy_net, render=False)
+    train(env, opt.episodes, double_dqn=opt.double)
+    torch.save(policy_net, f"logs/{run_id}.pt")
+    policy_net = torch.load(f"logs/{run_id}.pt")
+    logdir = f".videos/{run_id}/"
+    test(env, 1, policy_net, logdir, render=False)
 
