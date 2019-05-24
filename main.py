@@ -1,4 +1,5 @@
 import copy
+import os
 from collections import namedtuple
 from itertools import count
 import math
@@ -17,7 +18,7 @@ import ptan
 from wrappers import *
 from memory import ReplayMemory
 from models import *
-from lunar_lander import LunarLanderContinuous
+from lunar_lander import LunarLander
 
 import torch
 import torch.nn as nn
@@ -39,7 +40,7 @@ def select_action(policy, state, epsilon):
     sample = random.random()
     if sample > epsilon:
         with torch.no_grad():
-            return policy(state.to(device)).max(1)[1].view(1, 1)
+            return policy(state).max(1)[1].view(1, 1)
     else:
         return torch.tensor([[random.randrange(N_ACTIONS)]], device=device, dtype=torch.long)
 
@@ -84,11 +85,13 @@ def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=
     if len(memory) < BATCH_SIZE:
         return
 
-    # sample replay buffer
-    state_batch, action_batch, reward_batch, non_final_mask, non_final_next_states = sample_memory(memory, device)
+    if batch is None:
+        batch = sample_memory(memory, device)
 
-    # sample next state values
+    state_batch, action_batch, reward_batch, non_final_mask, non_final_next_states = batch
+
     state_action_values = policy_net(state_batch).gather(1, action_batch)
+
     next_state_values = torch.zeros(BATCH_SIZE, device=device)
 
     # Compute expected state action value
@@ -108,8 +111,8 @@ def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=
     # optimize
     optimizer.zero_grad()
     loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
+    #for param in policy_net.parameters():
+    #    param.grad.data.clamp_(-1, 1)
     optimizer.step()
 
 
@@ -122,9 +125,8 @@ def get_state(obs):
     if RAM:
         state = torch.tensor(obs, dtype=torch.float)
     else:
-        state = torch.tensor(obs)
-        state = state.permute(2, 0, 1)
-    return state.unsqueeze(0)
+        state = torch.tensor(obs.__array__())
+    return state.unsqueeze(0).contiguous()
 
 
 def train(env, policy_net, target_net, memory, n_episodes, render=False, double_dqn=False):
@@ -140,18 +142,18 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
 
     for episode in tqdm(range(n_episodes)):
         obs = env.reset()
-        state = get_state(obs)
+        state = get_state(obs).to(device, non_blocking=True)
         total_reward = 0.
         elaps = time.time()
         frames = 0
         total_opt_time = 0.
+        batch = None
         for t in count():
-
 
             epsilon = update_epsilon(steps_done)
             steps_done += 1
-
             frames += 1
+
             action = select_action(policy_net, state, epsilon)
 
             if render:
@@ -162,21 +164,24 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
             total_reward += reward
 
             if not done:
-                next_state = get_state(obs)
+                next_state = get_state(obs).to(device, non_blocking=True)
             else:
                 next_state = None
 
             reward = torch.tensor([reward], device=device, dtype=torch.float)
 
+            memory.push(state, action, next_state, reward)
 
-            memory.push(state, action.to('cpu'), next_state, reward.to('cpu'))
             state = next_state
 
             if steps_done > INITIAL_MEMORY:
+
                 if t % PLAY_STEPS == 0:
                     opt_time = time.time()
-                    optimize_model(policy_net, target_net, memory, use_double_dqn=double_dqn)
+                    optimize_model(policy_net, target_net, memory, batch=batch, use_double_dqn=double_dqn)
                     total_opt_time += time.time() - opt_time
+                    batch = sample_memory(memory, device, non_blocking=True)
+
                 if steps_done % TARGET_UPDATE == 0:
                     target_net.load_state_dict(policy_net.state_dict())
 
@@ -241,19 +246,21 @@ if __name__ == '__main__':
 
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default='7', help='version')
+    parser.add_argument('--root', type=str, default='logs/', help='log directory')
+    parser.add_argument('--version', default='8', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
-    parser.add_argument('--env_version', default="Deterministic-v4", help='gym env')
+    parser.add_argument('--env_version', default="NoFrameskip-v4", help='gym env')
     parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
     parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
-    parser.add_argument('--memory_size', type=int, default='500000', help='memory size')
+    parser.add_argument('--memory_size', type=int, default='100000', help='memory size')
     parser.add_argument('--initial_memory_size', type=int, default='10000', help='initial memory size')
     parser.add_argument('--epsilon_decay', type=int, default='100000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.02, help='minimum epsilon')
     parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
-    parser.add_argument('--target_update_freq', type=int, default='5000', help='number of episodes before each target update')
+    parser.add_argument('--target_update_freq', type=int, default='1000', help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
+    parser.add_argument('--dueling', action='store_true', help='use dueling DQN')
     parser.add_argument('--gamma', type=float, default=0.99, help='gamma parameter')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--render', action='store_true', help='render environment')
@@ -263,16 +270,23 @@ if __name__ == '__main__':
 
     env_id = f"{opt.env}{opt.env_version}"
 
-    print(env_id, "\n")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(env_id, "\nDEVICE:", device, "\n")
+
+    if not os.path.exists(opt.root):
+        os.makedirs(opt.root)
 
     # define unique id
-    run_id = f"{'DoubleDQN' if opt.double else 'DQN'}-{env_id}-version-{opt.version}-{opt.batch_size}-{opt.gamma}-{opt.lr}-{opt.play_steps}-{opt.memory_size}"
+    model_id = 'DDQN' if opt.dueling else 'DQN'
+    if opt.double:
+        model_id = 'Double' + model_id
+    run_id = f"{model_id}-{env_id}-version-{opt.version}-{opt.batch_size}-{opt.gamma}-{opt.lr}-{opt.play_steps}-{opt.memory_size}"
 
     # logging
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(name)-4s %(levelname)-4s %(message)s',
                         datefmt='%m-%d %H:%M',
-                        handlers=[logging.FileHandler(f"logs/{run_id}.log"),
+                        handlers=[logging.FileHandler(f"{opt.root}/{run_id}.log"),
                                   logging.StreamHandler()])
     logger = logging.getLogger(run_id)
 
@@ -280,7 +294,6 @@ if __name__ == '__main__':
     seed = 42
     torch.manual_seed(seed)
     np.random.seed(seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = opt.batch_size * opt.play_steps
     GAMMA = opt.gamma
     EPS_START = 1
@@ -297,12 +310,13 @@ if __name__ == '__main__':
     HUMAN = opt.human
 
     # create environment
-    if opt.env == 'lunar':
-        env = LunarLanderContinuous()
+    if 'lunar' in opt.env:
+        env = LunarLander()
         RAM = True
     else:
         env = gym.make(env_id)
-        env = make_env(env)
+        #env = make_env(env)
+        env = ptan.common.wrappers.wrap_dqn(env)
         RAM = False
 
     N_ACTIONS = env.action_space.n
@@ -331,9 +345,11 @@ if __name__ == '__main__':
             if key == KEY.UP:    human_agent_action = 4
             if key == KEY.DOWN:  human_agent_action = 3
 
+
         def key_release(key, mod):
             global human_agent_action
             human_agent_action = 1
+
 
         env.render()
         env.unwrapped.viewer.window.on_key_press = key_press
@@ -348,13 +364,14 @@ if __name__ == '__main__':
         policy_net = MODEL(N_STATE, N_ACTIONS).to(device)
         target_net = MODEL(N_STATE, N_ACTIONS).to(device)
     else:
-        policy_net = DQNbn(n_actions=N_ACTIONS).to(device)
-        target_net = DQNbn(n_actions=N_ACTIONS).to(device)
+        MODEL = DDQNbn if opt.dueling else DQNbn
+        policy_net = MODEL(n_actions=N_ACTIONS).to(device)
+        target_net = MODEL(n_actions=N_ACTIONS).to(device)
 
     target_net.load_state_dict(policy_net.state_dict())
 
     # setup optimizer
-    optimizer = optim.Adam(policy_net.parameters(), lr=opt.lr)
+    optimizer = optim.Adam(policy_net.parameters(), lr=lr)
 
     # initialize replay memory
     memory = ReplayMemory(MEMORY_SIZE)
@@ -362,7 +379,7 @@ if __name__ == '__main__':
     # train model and evaluate
     if not opt.evaluate:
         train(env, policy_net, target_net, memory, opt.episodes, double_dqn=opt.double, render=RENDER)
-        torch.save(policy_net, f"logs/{run_id}.pt")
-    policy_net = torch.load(f"logs/{run_id}.pt", map_location=device)
-    logdir = f".videos/{run_id}/"
+        torch.save(policy_net, f"{opt.root}/{run_id}.pt")
+    policy_net = torch.load(f"{opt.root}/{run_id}.pt", map_location=device)
+    logdir = f"{opt.root}/.videos/{run_id}/"
     test(env, 10, policy_net, logdir, render=RENDER)
