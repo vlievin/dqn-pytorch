@@ -31,11 +31,55 @@ class DQNbn(nn.Module):
             nn.Linear(512, n_actions)
         )
 
+        def init_weights(m):
+            if type(m) == nn.Linear or type(m) == nn.Conv2d:
+                torch.nn.init.xavier_normal_(m.weight, gain=2.0)
+                m.bias.data.fill_(0.01)
+
+        self.apply(init_weights)
+
     def forward(self, x):
         x = x.float() / 255
         x = self.convs(x)
         x = x.view(x.size(0), -1)
         return self.fc(x)
+
+
+class LanderDQN(nn.Module):
+    def __init__(self, n_state, n_actions, nhid=64):
+        super(RamDQN, self).__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(n_state, nhid),
+            nn.BatchNorm1d(nhid),
+            nn.ReLU(),
+            nn.Linear(nhid, nhid),
+            nn.BatchNorm1d(nhid),
+            nn.ReLU(),
+            nn.Linear(nhid, n_actions)
+        )
+
+    def forward(self, x):
+        return self.layers(x)
+
+class RamDQN(nn.Module):
+    def __init__(self, n_state, n_actions):
+        super(RamDQN, self).__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(n_state, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Linear(64, n_actions)
+        )
+
+    def forward(self, x):
+        return self.layers(x)
+
 
 
 class DQN(nn.Module):
