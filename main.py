@@ -27,38 +27,54 @@ import torch.nn.functional as F
 Transition = namedtuple('Transion', ('state', 'action', 'next_state', 'reward'))
 
 
-def select_action(state):
+def select_action(policy, state, epsilon):
     """
     select action folowing an epsilon greedy policy
     :param state: current stae
     :return: action as a long tensor
     """
+    policy.eval()
 
-    global steps_done
-    global epsilon
-    steps_done += 1
+    # policy
+    sample = random.random()
+    if sample > epsilon:
+        with torch.no_grad():
+            return policy(state.to(device)).max(1)[1].view(1, 1)
+    else:
+        return torch.tensor([[random.randrange(N_ACTIONS)]], device=device, dtype=torch.long)
 
-    policy_net.eval()
 
+def update_epsilon(steps_done):
     # epsilon decay
     if steps_done > EPS_OFFSET:
         epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * (steps_done - EPS_OFFSET) / (EPS_DECAY + EPS_OFFSET))
     else:
         epsilon = EPS_START
 
-    # policy
-    sample = random.random()
-    if sample > epsilon:
-        with torch.no_grad():
-            return policy_net(state.to(device)).max(1)[1].view(1, 1)
-    else:
-        return torch.tensor([[random.randrange(N_ACTIONS)]], device=device, dtype=torch.long)
+    return epsilon
+
+def sample_memory(memory, device, non_blocking=False):
+    # sample replay buffer
+    transitions = memory.sample(BATCH_SIZE)
+    batch = Transition(*zip(*transitions))
+
+    # convert to tensors and create batches
+    actions = batch.action
+    rewards = batch.reward
+
+    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=device, dtype=torch.uint8)
+    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None]).to(device, non_blocking=non_blocking)
+    state_batch = torch.cat(batch.state).to(device, non_blocking=non_blocking)
+    action_batch = torch.cat(actions).to(device, non_blocking=non_blocking)
+    reward_batch = torch.cat(rewards).to(device, non_blocking=non_blocking)
+
+    return state_batch, action_batch, reward_batch, non_final_mask, non_final_next_states
 
 
-def optimize_model(double_dqn):
+def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=False):
     """
     optimize policy
-    :param double_dqn: use double DQN
+    :param use_double_dqn: use double DQN
     :return: None
     """
 
@@ -69,26 +85,14 @@ def optimize_model(double_dqn):
         return
 
     # sample replay buffer
-    transitions = memory.sample(BATCH_SIZE)
-    batch = Transition(*zip(*transitions))
-
-    # convert to tensors and create batches
-    actions = tuple((map(lambda a: torch.tensor([[a]], device=device, ), batch.action)))
-    rewards = tuple((map(lambda r: torch.tensor([r], device=device), batch.reward)))
-
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=device,
-                                  dtype=torch.uint8)
-    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None]).to(device)
-    state_batch = torch.cat(batch.state).to(device)
-    action_batch = torch.cat(actions)
-    reward_batch = torch.cat(rewards)
+    state_batch, action_batch, reward_batch, non_final_mask, non_final_next_states = sample_memory(memory, device)
 
     # sample next state values
     state_action_values = policy_net(state_batch).gather(1, action_batch)
     next_state_values = torch.zeros(BATCH_SIZE, device=device)
 
     # Compute expected state action value
-    if double_dqn:
+    if use_double_dqn:
         argmax_next_state_values = policy_net(non_final_next_states).argmax(1).detach().unsqueeze(1)
         next_state_values[non_final_mask] = target_net(non_final_next_states).gather(1,
                                                                                      argmax_next_state_values).detach().squeeze()
@@ -123,7 +127,7 @@ def get_state(obs):
     return state.unsqueeze(0)
 
 
-def train(env, n_episodes, render=False, double_dqn=False):
+def train(env, policy_net, target_net, memory, n_episodes, render=False, double_dqn=False):
     """
     train the policy model for n_episodes
     :param env: gym environment
@@ -132,6 +136,8 @@ def train(env, n_episodes, render=False, double_dqn=False):
     :param double_dqn: use double DQN policy
     :return: None
     """
+    steps_done = 0
+
     for episode in tqdm(range(n_episodes)):
         obs = env.reset()
         state = get_state(obs)
@@ -141,8 +147,12 @@ def train(env, n_episodes, render=False, double_dqn=False):
         total_opt_time = 0.
         for t in count():
 
+
+            epsilon = update_epsilon(steps_done)
+            steps_done += 1
+
             frames += 1
-            action = select_action(state)
+            action = select_action(policy_net, state, epsilon)
 
             if render:
                 env.render()
@@ -165,7 +175,7 @@ def train(env, n_episodes, render=False, double_dqn=False):
             if steps_done > INITIAL_MEMORY:
                 if t % PLAY_STEPS == 0:
                     opt_time = time.time()
-                    optimize_model(double_dqn)
+                    optimize_model(policy_net, target_net, memory, use_double_dqn=double_dqn)
                     total_opt_time += time.time() - opt_time
                 if steps_done % TARGET_UPDATE == 0:
                     target_net.load_state_dict(policy_net.state_dict())
@@ -346,15 +356,12 @@ if __name__ == '__main__':
     # setup optimizer
     optimizer = optim.Adam(policy_net.parameters(), lr=opt.lr)
 
-    steps_done = 0
-    epsilon = 1.0
-
     # initialize replay memory
     memory = ReplayMemory(MEMORY_SIZE)
 
     # train model and evaluate
     if not opt.evaluate:
-        train(env, opt.episodes, double_dqn=opt.double, render=RENDER)
+        train(env, policy_net, target_net, memory, opt.episodes, double_dqn=opt.double, render=RENDER)
         torch.save(policy_net, f"logs/{run_id}.pt")
     policy_net = torch.load(f"logs/{run_id}.pt", map_location=device)
     logdir = f".videos/{run_id}/"
