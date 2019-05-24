@@ -231,9 +231,9 @@ if __name__ == '__main__':
 
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default='6', help='version')
+    parser.add_argument('--version', default='7', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
-    parser.add_argument('--env_version', default="NoFrameskip-v4", help='gym env')
+    parser.add_argument('--env_version', default="Deterministic-v4", help='gym env')
     parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
     parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
