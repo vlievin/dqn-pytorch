@@ -242,7 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--epsilon_decay', type=int, default='100000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.02, help='minimum epsilon')
     parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
-    parser.add_argument('--target_update_freq', type=int, default='1000',
+    parser.add_argument('--target_update_freq', type=int, default='5000',
                         help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
     parser.add_argument('--gamma', type=float, default=0.99, help='gamma parameter')
