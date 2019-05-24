@@ -4,15 +4,18 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.transforms as T
 
-
-def init_weights(m):
-    pass
-    # if type(m) == nn.Linear or type(m) == nn.Conv2d:
-    #    torch.nn.init.xavier_normal_(m.weight, gain=1.0)
+RANGE = 255
 
 class DQNbn(torch.jit.ScriptModule):
+    __constants__ = ['RANGE']
+
     def __init__(self, in_channels=4, n_actions=14):
+
+
         super(DQNbn, self).__init__()
+
+        self.RANGE = RANGE
+
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
             # nn.BatchNorm2d(32),
@@ -30,11 +33,9 @@ class DQNbn(torch.jit.ScriptModule):
             nn.Linear(512, n_actions)
         )
 
-        self.apply(init_weights)
-
     @torch.jit.script_method
     def forward(self, x):
-        x = x.float() / 255
+        x = x.float() / self.RANGE
         x = self.convs(x)
         x = x.view(x.size(0), -1)
         return self.fc(x)
@@ -42,11 +43,12 @@ class DQNbn(torch.jit.ScriptModule):
 
 class DDQNbn(torch.jit.ScriptModule):
     def __init__(self, in_channels=4, n_actions=14):
-        __constants__ = ['n_actions']
+        __constants__ = ['n_actions', 'r']
 
         super(DDQNbn, self).__init__()
 
         self.n_actions = n_actions
+        self.r = 255.
 
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
@@ -71,11 +73,9 @@ class DDQNbn(torch.jit.ScriptModule):
             nn.Linear(512, 1)
         )
 
-        self.apply(init_weights)
-
     @torch.jit.script_method
     def forward(self, x):
-        x = x.float() / 255
+        x = x.float() / self.r
         x = self.convs(x)
         x = x.view(x.size(0), -1)
 
@@ -84,10 +84,21 @@ class DDQNbn(torch.jit.ScriptModule):
 
         return val + adv - adv.mean(1).unsqueeze(1)
 
+    @torch.jit.script_method
+    def value(self, x):
+        x = x.float() / 255
+        x = self.convs(x)
+        x = x.view(x.size(0), -1)
+
+        val = self.fc_adv(x)
+
+        return val
+
 
 class LanderDQN(torch.jit.ScriptModule):
     def __init__(self, n_state, n_actions, nhid=64):
         super(RamDQN, self).__init__()
+
         self.layers = nn.Sequential(
             nn.Linear(n_state, nhid),
             #nn.BatchNorm1d(nhid),
@@ -120,7 +131,6 @@ class RamDQN(nn.Module):
             nn.Linear(64, n_actions)
         )
 
-        self.apply(init_weights)
 
     @torch.jit.script_method
     def forward(self, x):

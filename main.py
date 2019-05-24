@@ -139,7 +139,7 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
     :return: None
     """
     steps_done = 0
-
+    rewards = []
     for episode in tqdm(range(n_episodes)):
         obs = env.reset()
         state = get_state(obs).to(device, non_blocking=True)
@@ -188,11 +188,14 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
             if done:
                 break
 
+        rewards += [total_reward]
+
         if episode % LOG_FREQ == 0:
             elaps = (time.time() - elaps)
             frames_seconds = frames / elaps
             logger.info(
-                f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {total_reward:.0f}')
+                f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f}')
+            rewards = []
     env.close()
     return
 
@@ -247,13 +250,13 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=str, default='logs/', help='log directory')
-    parser.add_argument('--version', default='8', help='version')
+    parser.add_argument('--version', default='9', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
     parser.add_argument('--env_version', default="NoFrameskip-v4", help='gym env')
     parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
     parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
-    parser.add_argument('--memory_size', type=int, default='100000', help='memory size')
+    parser.add_argument('--memory_size', type=int, default='300000', help='memory size')
     parser.add_argument('--initial_memory_size', type=int, default='10000', help='initial memory size')
     parser.add_argument('--epsilon_decay', type=int, default='100000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.02, help='minimum epsilon')
@@ -360,7 +363,7 @@ if __name__ == '__main__':
         a = random.randrange(env.action_space.n)
         s, r, done, info = env.step(a)
         N_STATE = len(s)
-        MODEL = LanderDQN if 'lander' in opt.env else RamDQN
+        MODEL = LanderDQN if 'lunar' in opt.env else RamDQN
         policy_net = MODEL(N_STATE, N_ACTIONS).to(device)
         target_net = MODEL(N_STATE, N_ACTIONS).to(device)
     else:
@@ -379,7 +382,7 @@ if __name__ == '__main__':
     # train model and evaluate
     if not opt.evaluate:
         train(env, policy_net, target_net, memory, opt.episodes, double_dqn=opt.double, render=RENDER)
-        torch.save(policy_net, f"{opt.root}/{run_id}.pt")
-    policy_net = torch.load(f"{opt.root}/{run_id}.pt", map_location=device)
+        torch.save(policy_net.state_dict(), f"{opt.root}/{run_id}.pt")
+    policy_net.load_state_dict(torch.load(f"{opt.root}/{run_id}.pt"))
     logdir = f"{opt.root}/.videos/{run_id}/"
     test(env, 10, policy_net, logdir, render=RENDER)
