@@ -148,7 +148,7 @@ def train(env, n_episodes, render=False, double_dqn=False):
             if done:
                 break
 
-        if episode % 1 == 0:
+        if episode % LOG_FREQ == 0:
             elaps = (time.time() - elaps)
             frames_seconds = frames / elaps
             logger.info(
@@ -196,12 +196,13 @@ if __name__ == '__main__':
     parser.add_argument('--version', default='4', help='version')
     parser.add_argument('--env', default="PongNoFrameskip-v4", help='gym env')
     parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
+    parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
     parser.add_argument('--memory_size', type=int, default='100000', help='memory size')
     parser.add_argument('--initial_memory_size', type=int, default='10000', help='initial memory size')
     parser.add_argument('--epsilon_decay', type=int, default='100000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.02, help='minimum epsilon')
-    parser.add_argument('--play_steps', type=int, default=1, help='number of playing steps without optimization')
+    parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
     parser.add_argument('--target_update_freq', type=int, default='1000',
                         help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
@@ -234,6 +235,7 @@ if __name__ == '__main__':
     EPS_DECAY = opt.epsilon_decay
     EPS_OFFSET = opt.initial_memory_size
     TARGET_UPDATE = opt.target_update_freq
+    LOG_FREQ = opt.log_freq
     RENDER = False
     lr = opt.lr
     INITIAL_MEMORY = opt.initial_memory_size
