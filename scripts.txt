@@ -1,0 +1,3 @@
+
+# lunar env
+python main.py --env lunar --lr 1e-3 --memory_size=50000 --initial_memory_size=1000 --target_update_freq 3000
