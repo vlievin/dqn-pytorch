@@ -15,10 +15,10 @@ class DQNbn(torch.jit.ScriptModule):
         super(DQNbn, self).__init__()
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
-            #nn.BatchNorm2d(32),
+            # nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            #nn.BatchNorm2d(64),
+            # nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1),
             #nn.BatchNorm2d(64),
@@ -26,6 +26,7 @@ class DQNbn(torch.jit.ScriptModule):
         )
         self.fc = nn.Sequential(
             nn.Linear(7 * 7 * 64, 512),
+            nn.ReLU(),
             nn.Linear(512, n_actions)
         )
 
@@ -60,11 +61,13 @@ class DDQNbn(torch.jit.ScriptModule):
         )
         self.fc_adv = nn.Sequential(
             nn.Linear(7 * 7 * 64, 512),
+            nn.ReLU(),
             nn.Linear(512, n_actions)
         )
 
         self.fc_val = nn.Sequential(
             nn.Linear(7 * 7 * 64, 512),
+            nn.ReLU(),
             nn.Linear(512, 1)
         )
 
