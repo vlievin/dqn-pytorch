@@ -1,6 +1,6 @@
 import copy
 import os
-from collections import namedtuple
+from collections import namedtuple, Counter
 from itertools import count
 import math
 import random
@@ -111,8 +111,7 @@ def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=
     # optimize
     optimizer.zero_grad()
     loss.backward()
-    #for param in policy_net.parameters():
-    #    param.grad.data.clamp_(-1, 1)
+    nn.utils.clip_grad_norm_(policy_net.parameters(), 10.)
     optimizer.step()
 
 
@@ -140,62 +139,72 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
     """
     steps_done = 0
     rewards = []
-    for episode in tqdm(range(n_episodes)):
-        obs = env.reset()
-        state = get_state(obs).to(device, non_blocking=True)
-        total_reward = 0.
-        elaps = time.time()
-        frames = 0
-        total_opt_time = 0.
-        batch = None
-        for t in count():
+    iters = 0
+    with tqdm(total=MAX_FRAMES) as pbar:
+        for episode in count():
+            obs = env.reset()
+            state = get_state(obs).to(device, non_blocking=True)
+            total_reward = 0.
+            elaps = time.time()
+            frames = 0
+            total_opt_time = 0.
+            batch = None
+            for t in count():
 
-            epsilon = update_epsilon(steps_done)
-            steps_done += 1
-            frames += 1
+                epsilon = update_epsilon(steps_done)
+                steps_done += 1
+                frames += 1
+                iters += 1
 
-            action = select_action(policy_net, state, epsilon)
+                action = select_action(policy_net, state, epsilon)
 
-            if render:
-                env.render()
+                if render:
+                    env.render()
 
-            obs, reward, done, info = env.step(action)
+                obs, reward, done, info = env.step(action)
 
-            total_reward += reward
+                total_reward += reward
 
-            if not done:
-                next_state = get_state(obs).to(device, non_blocking=True)
-            else:
-                next_state = None
+                if not done:
+                    next_state = get_state(obs).to(device, non_blocking=True)
+                else:
+                    next_state = None
 
-            reward = torch.tensor([reward], device=device, dtype=torch.float)
+                reward = torch.tensor([reward], device=device, dtype=torch.float)
 
-            memory.push(state, action, next_state, reward)
+                memory.push(state, action, next_state, reward)
 
-            state = next_state
+                state = next_state
 
-            if steps_done > INITIAL_MEMORY:
+                if steps_done > INITIAL_MEMORY:
 
-                if t % PLAY_STEPS == 0:
-                    opt_time = time.time()
-                    optimize_model(policy_net, target_net, memory, batch=batch, use_double_dqn=double_dqn)
-                    total_opt_time += time.time() - opt_time
-                    batch = sample_memory(memory, device, non_blocking=True)
+                    if t % PLAY_STEPS == 0:
+                        opt_time = time.time()
+                        optimize_model(policy_net, target_net, memory, batch=batch, use_double_dqn=double_dqn)
+                        total_opt_time += time.time() - opt_time
+                        batch = sample_memory(memory, device, non_blocking=True)
 
-                if steps_done % TARGET_UPDATE == 0:
-                    target_net.load_state_dict(policy_net.state_dict())
+                    if steps_done % TARGET_UPDATE == 0:
+                        target_net.load_state_dict(policy_net.state_dict())
 
-            if done:
+                if iters > 500:
+                    pbar.update(iters)
+                    iters = 0
+
+                if done:
+                    break
+
+            rewards += [total_reward]
+
+            if episode % LOG_FREQ == 0:
+                elaps = (time.time() - elaps)
+                frames_seconds = frames / elaps
+                logger.info(
+                    f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f} ({np.std(rewards):.2f})')
+                rewards = []
+                
+            if steps_done > MAX_FRAMES:
                 break
-
-        rewards += [total_reward]
-
-        if episode % LOG_FREQ == 0:
-            elaps = (time.time() - elaps)
-            frames_seconds = frames / elaps
-            logger.info(
-                f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f}')
-            rewards = []
     env.close()
     return
 
@@ -250,18 +259,19 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=str, default='logs/', help='log directory')
-    parser.add_argument('--version', default='9', help='version')
+    parser.add_argument('--version', default='final2', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
     parser.add_argument('--env_version', default="NoFrameskip-v4", help='gym env')
     parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
+    parser.add_argument('--frames', type=int, default='5000000', help='number of episodes')
     parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
     parser.add_argument('--memory_size', type=int, default='300000', help='memory size')
-    parser.add_argument('--initial_memory_size', type=int, default='10000', help='initial memory size')
-    parser.add_argument('--epsilon_decay', type=int, default='100000', help='number of steps to decrease epsilon')
-    parser.add_argument('--min_epsilon', type=float, default=0.02, help='minimum epsilon')
+    parser.add_argument('--initial_memory_size', type=int, default='100000', help='initial memory size')
+    parser.add_argument('--epsilon_decay', type=int, default='1000000', help='number of steps to decrease epsilon')
+    parser.add_argument('--min_epsilon', type=float, default=0.1, help='minimum epsilon')
     parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
-    parser.add_argument('--target_update_freq', type=int, default='1000', help='number of episodes before each target update')
+    parser.add_argument('--sync_freq', type=int, default='10000', help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
     parser.add_argument('--dueling', action='store_true', help='use dueling DQN')
     parser.add_argument('--gamma', type=float, default=0.99, help='gamma parameter')
@@ -303,9 +313,10 @@ if __name__ == '__main__':
     EPS_END = opt.min_epsilon
     EPS_DECAY = opt.epsilon_decay
     EPS_OFFSET = opt.initial_memory_size
-    TARGET_UPDATE = opt.target_update_freq
+    TARGET_UPDATE = opt.sync_freq
     LOG_FREQ = opt.log_freq
     RENDER = opt.render
+    MAX_FRAMES = opt.frames
     lr = opt.lr
     INITIAL_MEMORY = opt.initial_memory_size
     MEMORY_SIZE = opt.memory_size
@@ -374,7 +385,8 @@ if __name__ == '__main__':
     target_net.load_state_dict(policy_net.state_dict())
 
     # setup optimizer
-    optimizer = optim.Adam(policy_net.parameters(), lr=lr)
+    # optimizer = optim.Adam(policy_net.parameters(), lr=lr, betas=(0.9,0.98))
+    optimizer = optim.RMSprop(policy_net.parameters(), lr=lr)
 
     # initialize replay memory
     memory = ReplayMemory(MEMORY_SIZE)
