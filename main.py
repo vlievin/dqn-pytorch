@@ -227,8 +227,16 @@ def test(env, n_episodes, policy, logdir, render=True):
                     pass
 
             if render:
-                env.render()
-                time.sleep(0.1)
+                _wait_time = 0.1
+                if visualize_saliency:
+                    t = time.time()
+                    visualize(env, state, policy)
+                    run_time = time.time() - t
+                    if run_time < _wait_time:
+                        time.sleep(_wait_time - run_time)
+                else:
+                    env.render()
+                    time.sleep(_wait_time)
 
             obs, reward, done, info = env.step(action)
 
@@ -247,6 +255,36 @@ def test(env, n_episodes, policy, logdir, render=True):
 
     env.close()
     return
+
+
+from visualize import *
+
+def visualize(env, state, policy):
+
+    I = env.ale.getScreenRGB2().astype(np.float32)
+
+    saliency = saliency_map(state, policy, I.shape[:2])
+
+    #smax = saliency.max()
+    #saliency -= saliency.min()
+    #saliency /= saliency.max()
+
+    blue_mask = np.ones_like(I)
+    blue_mask[:,:,2] = 255.
+
+    saliency = (saliency.squeeze().data).numpy()[:,:,None]
+
+    thresh = 0.2
+    saliency = 0.8 * (saliency.clip(thresh, 1.0) - thresh) / (1-thresh)
+
+    I =  saliency * blue_mask + (1.-saliency) * I
+
+    #I[:,:, 2] += (5. * saliency).astype(I.dtype)
+
+    I = I.clip(1, 255).astype('uint8')
+
+    env.viewer.imshow(I)
+
 
 
 if __name__ == '__main__':
@@ -278,7 +316,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--render', action='store_true', help='render environment')
     parser.add_argument('--evaluate', action='store_true', help='evalaute trained model')
-    parser.add_argument('--human', action='store_true', help='play yourself')
+    parser.add_argument('--human', action='store_true', help='play yourself (press SPACE bar to give control to the agent, press S to display saliency)')
+
     opt = parser.parse_args()
 
     env_id = f"{opt.env}{opt.env_version}"
@@ -346,18 +385,20 @@ if __name__ == '__main__':
         human_agent_action = 0
         human_wants_restart = False
         human_sets_pause = False
+        visualize_saliency = False
 
 
         def key_press(key, mod):
-            global human_agent_action, human_wants_restart, human_sets_pause
-
+            global human_agent_action, human_wants_restart, human_sets_pause, visualize_saliency
             if key == 0xff0d: human_wants_restart = True
             if key == 32: human_sets_pause = not human_sets_pause
+            if key == KEY.S: visualize_saliency = not visualize_saliency
 
             if key == KEY.LEFT:  human_agent_action = 0
             if key == KEY.RIGHT: human_agent_action = 2
             if key == KEY.UP:    human_agent_action = 4
             if key == KEY.DOWN:  human_agent_action = 3
+
 
 
         def key_release(key, mod):
@@ -395,6 +436,7 @@ if __name__ == '__main__':
     if not opt.evaluate:
         train(env, policy_net, target_net, memory, opt.episodes, double_dqn=opt.double, render=RENDER)
         torch.save(policy_net.state_dict(), f"{opt.root}/{run_id}.pt")
-    policy_net.load_state_dict(torch.load(f"{opt.root}/{run_id}.pt"))
+    policy_net.load_state_dict(torch.load(f"{opt.root}/{run_id}.pt", map_location=device))
     logdir = f"{opt.root}/.videos/{run_id}/"
-    test(env, 10, policy_net, logdir, render=RENDER)
+    with torch.no_grad():
+        test(env, 10, policy_net, logdir, render=RENDER)

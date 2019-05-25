@@ -91,9 +91,17 @@ class DDQNbn(torch.jit.ScriptModule):
         x = x.view(x.size(0), -1)
 
         adv = self.fc_adv(x)
-        val = self.fc_adv(x)
+        val = self.fc_val(x)
 
         return val + adv - adv.mean(1).unsqueeze(1)
+
+    @torch.jit.script_method
+    def value(self, x):
+        x = x.float() / 255
+        x = self.convs(x)
+        x = x.view(x.size(0), -1)
+
+        return self.fc_adv(x)
 
 
 class LanderDQN(torch.jit.ScriptModule):
