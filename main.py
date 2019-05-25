@@ -263,7 +263,7 @@ def visualize(env, state, policy):
 
     I = env.ale.getScreenRGB2().astype(np.float32)
 
-    saliency = saliency_map(state, policy, I.shape[:2])
+    saliency, sign = saliency_map(state, policy, I.shape[:2])
 
     #smax = saliency.max()
     #saliency -= saliency.min()
@@ -272,12 +272,16 @@ def visualize(env, state, policy):
     blue_mask = np.ones_like(I)
     blue_mask[:,:,2] = 255.
 
+    red_mask = np.ones_like(I)
+    red_mask[:, :, 0] = 255.
+
     saliency = (saliency.squeeze().data).numpy()[:,:,None]
+    sign = (sign.squeeze().data).numpy()[:,:,None]
 
     thresh = 0.2
     saliency = 0.8 * (saliency.clip(thresh, 1.0) - thresh) / (1-thresh)
 
-    I =  saliency * blue_mask + (1.-saliency) * I
+    I =  np.where(sign > 0 , saliency * red_mask + (1.-saliency) * I, saliency * blue_mask + (1.-saliency) * I)
 
     #I[:,:, 2] += (5. * saliency).astype(I.dtype)
 

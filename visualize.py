@@ -98,9 +98,11 @@ def saliency_map(state, policy, output_shape, spacing=8, sigma=9, blur_sigma=15,
     m = int(math.sqrt(Ls.shape[0]))
     Ls = Ls.view(m,m)
 
+    Sign = (Ls > L.squeeze()).float()
     S = 0.5 * (Ls - L.squeeze())**2
 
     S = F.interpolate(S[None,None,:,:], output_shape, mode='nearest')
+    Sign = F.interpolate(Sign[None, None, :, :], output_shape, mode='nearest')
 
 
     S = S - S.min()
@@ -111,7 +113,7 @@ def saliency_map(state, policy, output_shape, spacing=8, sigma=9, blur_sigma=15,
     #S = blur_image(S, 3, 1)
     #S = S * smax
 
-    return S
+    return S, Sign
 
 
 
