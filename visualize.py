@@ -72,7 +72,7 @@ def blur_image(img, sigma, downsample):
     return img
 
 
-def generate_candidate_frames(img, spacing = 16, sigma = 15, blur_sigma = 9, contrast = 1.2, downsample = 8):
+def generate_candidate_frames(img, spacing = 16, sigma = 15, blur_sigma = 31, contrast = 1.2, downsample = 8):
 
     masks = generate_mask(img.shape[2:], spacing, sigma, downsample=downsample, contrast=contrast)
 
@@ -83,7 +83,7 @@ def generate_candidate_frames(img, spacing = 16, sigma = 15, blur_sigma = 9, con
     return outputs, masks
 
 
-def saliency_map(state, policy, output_shape, spacing=8, sigma=9, blur_sigma=15, contrast=1.2, downsample=8):
+def saliency_map(state, policy, output_shape, spacing=8, sigma=15, blur_sigma=9, contrast=1, downsample=8):
 
     state = state.float()
 

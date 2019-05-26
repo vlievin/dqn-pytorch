@@ -128,11 +128,11 @@ def get_state(obs):
     return state.unsqueeze(0).contiguous()
 
 
-def train(env, policy_net, target_net, memory, n_episodes, render=False, double_dqn=False):
+def train(env, policy_net, target_net, memory, max_frames, render=False, double_dqn=False):
     """
     train the policy model for n_episodes
     :param env: gym environment
-    :param n_episodes: number of episodes
+    :param max_frames: number of frames
     :param render: if True, renders the environment
     :param double_dqn: use double DQN policy
     :return: None
@@ -140,7 +140,7 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
     steps_done = 0
     rewards = []
     iters = 0
-    with tqdm(total=MAX_FRAMES) as pbar:
+    with tqdm(total=max_frames) as pbar:
         for episode in count():
             obs = env.reset()
             state = get_state(obs).to(device, non_blocking=True)
@@ -203,7 +203,7 @@ def train(env, policy_net, target_net, memory, n_episodes, render=False, double_
                     f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f} ({np.std(rewards):.2f})')
                 rewards = []
                 
-            if steps_done > MAX_FRAMES:
+            if steps_done > max_frames:
                 break
     env.close()
     return
@@ -271,15 +271,25 @@ def visualize(env, state, policy):
 
     blue_mask = np.ones_like(I)
     blue_mask[:,:,2] = 255.
+    blue_mask[:, :, 1] = 120.
 
     red_mask = np.ones_like(I)
     red_mask[:, :, 0] = 255.
+    red_mask[:, :,1] = 120.
 
     saliency = (saliency.squeeze().data).numpy()[:,:,None]
     sign = (sign.squeeze().data).numpy()[:,:,None]
 
-    thresh = 0.2
-    saliency = 0.8 * (saliency.clip(thresh, 1.0) - thresh) / (1-thresh)
+    global saliencies
+    saliencies += [saliency.max()]
+    if len(saliency) > 500:
+        saliencies.pop(0)
+
+    saliency /= np.mean(saliencies)
+
+    thresh = 0
+    saliency  *= 1.0
+    saliency = 0.6 * (saliency.clip(thresh, 1.0) - thresh) / (1-thresh)
 
     I =  np.where(sign > 0 , saliency * red_mask + (1.-saliency) * I, saliency * blue_mask + (1.-saliency) * I)
 
@@ -301,18 +311,17 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=str, default='logs/', help='log directory')
-    parser.add_argument('--version', default='final2', help='version')
+    parser.add_argument('--version', default='final4', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
     parser.add_argument('--env_version', default="NoFrameskip-v4", help='gym env')
-    parser.add_argument('--episodes', type=int, default='1000', help='number of episodes')
-    parser.add_argument('--frames', type=int, default='5000000', help='number of episodes')
+    parser.add_argument('--frames', type=int, default='10000000', help='number of episodes')
     parser.add_argument('--log_freq', type=int, default='1', help='log frequency')
     parser.add_argument('--batch_size', type=int, default='32', help='batch size')
     parser.add_argument('--memory_size', type=int, default='300000', help='memory size')
     parser.add_argument('--initial_memory_size', type=int, default='100000', help='initial memory size')
     parser.add_argument('--epsilon_decay', type=int, default='1000000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.1, help='minimum epsilon')
-    parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
+    parser.add_argument('--play_steps', type=int, default=1, help='number of playing steps without optimization')
     parser.add_argument('--sync_freq', type=int, default='10000', help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
     parser.add_argument('--dueling', action='store_true', help='use dueling DQN')
@@ -345,6 +354,8 @@ if __name__ == '__main__':
                         handlers=[logging.FileHandler(f"{opt.root}/{run_id}.log"),
                                   logging.StreamHandler()])
     logger = logging.getLogger(run_id)
+
+    saliencies = []
 
     # parameters
     seed = 42
@@ -438,7 +449,7 @@ if __name__ == '__main__':
 
     # train model and evaluate
     if not opt.evaluate:
-        train(env, policy_net, target_net, memory, opt.episodes, double_dqn=opt.double, render=RENDER)
+        train(env, policy_net, target_net, memory, MAX_FRAMES, double_dqn=opt.double, render=RENDER)
         torch.save(policy_net.state_dict(), f"{opt.root}/{run_id}.pt")
     policy_net.load_state_dict(torch.load(f"{opt.root}/{run_id}.pt", map_location=device))
     logdir = f"{opt.root}/.videos/{run_id}/"
