@@ -5,7 +5,7 @@ import math
 
 
 def gaussian_kernel(sigma=3):
-    kernel_size = 5 * sigma
+    kernel_size = int(5 * sigma)
 
     # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
     x_cord = torch.arange(kernel_size)
@@ -34,7 +34,9 @@ def fill_mask(mask, m, k):
     for i in range(m[0]):
         for j in range(m[1]):
             u = k // 2
-            mask[q, :, u + (i * k) - 1:u + (i * k) + 2, u + (j * k) - 1:u + (j * k) + 2] = 1
+            #mask[q, :, u + (i * k) - 1:u + (i * k) + 2, u + (j * k) - 1:u + (j * k) + 2] = 1
+            mask[q, :, u + (i * k), u + (j * k) - 1:u + (j * k) + 2] = 1
+            mask[q, :, u + (i * k) - 1:u + (i * k) + 2, u + (j * k)] = 1
             q += 1
     return mask
 
@@ -44,7 +46,7 @@ def generate_mask(size, k, sigma, downsample=1, contrast=1):
     mask = torch.zeros((m[0] * m[1], 1, size[0] // downsample, size[1] // downsample), dtype=torch.long)
     mask = fill_mask(mask, m, k // downsample)
     mask = torch.tensor(mask, dtype=torch.float)
-    kernel = gaussian_kernel(sigma=sigma // downsample)[None, None, :, :]
+    kernel = gaussian_kernel(sigma=sigma / downsample)[None, None, :, :]
     convolved = F.conv2d(mask, kernel, groups=1, padding=(kernel.shape[-1] - 1) // 2)
 
     mask = F.interpolate(convolved, size, mode='bilinear')
@@ -72,31 +74,39 @@ def blur_image(img, sigma, downsample):
     return img
 
 
-def generate_candidate_frames(img, spacing = 16, sigma = 15, blur_sigma = 31, contrast = 1.2, downsample = 8):
+def generate_candidate_frames(img, spacing = 6, sigma = 9, blur_sigma = 15, contrast = 1.2, downsample = 8, use_mode=False):
 
     masks = generate_mask(img.shape[2:], spacing, sigma, downsample=downsample, contrast=contrast)
 
-    blurred_img = blur_image(img.float(), blur_sigma, downsample)
+    if use_mode:
+        mode,_ = torch.mode(img.transpose(1,0).view(4, -1), -1)
+        blurred_img = mode[None,:,None,None].expand_as(img)
+    else:
+        blurred_img = blur_image(img.float(), blur_sigma, downsample)
 
     outputs = (masks) * blurred_img + (1 - masks) * img.float()
+
+    # from matplotlib import pyplot as plt
+    # plt.imshow(outputs[30, 0].data.numpy())
+    # plt.show()
 
     return outputs, masks
 
 
-def saliency_map(state, policy, output_shape, spacing=8, sigma=15, blur_sigma=9, contrast=1, downsample=8):
+def saliency_map(state, policy, output_shape, spacing=5, sigma=6, blur_sigma=9, contrast=1.5, downsample=5, use_mode=True):
 
     state = state.float()
 
-    candidates, masks = generate_candidate_frames(state, spacing=spacing, sigma=sigma, blur_sigma=blur_sigma, contrast=contrast, downsample=downsample)
+    candidates, masks = generate_candidate_frames(state, spacing=spacing, sigma=sigma, blur_sigma=blur_sigma, contrast=contrast, downsample=downsample, use_mode=use_mode)
 
     frames = torch.cat([state, candidates], 0)
 
-    values = policy.value(frames).sum(1)
+    values,_ = policy.forward(frames).max(1)
 
     L, Ls = values[:1], values[1:]
 
     m = int(math.sqrt(Ls.shape[0]))
-    Ls = Ls.view(m,m)
+    Ls = Ls.view(m,m).transpose(1,0)
 
     Sign = (Ls > L.squeeze()).float()
     S = 0.5 * (Ls - L.squeeze())**2
@@ -105,10 +115,10 @@ def saliency_map(state, policy, output_shape, spacing=8, sigma=15, blur_sigma=9,
     Sign = F.interpolate(Sign[None, None, :, :], output_shape, mode='nearest')
 
 
-    S = S - S.min()
+    #S = S - S.min()
 
     #smax = S.max()
-    S = S / S.max()
+    #S = S / S.max()
 
     #S = blur_image(S, 3, 1)
     #S = S * smax

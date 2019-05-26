@@ -223,11 +223,12 @@ def test(env, n_episodes, policy, logdir, render=True):
             if HUMAN:
                 if not human_sets_pause:
                     action = human_agent_action
+                    #print(ACTIONS[action])
                 else:
                     pass
 
             if render:
-                _wait_time = 0.1
+                _wait_time = 0.1 if not human_fast_forward else 0.01
                 if visualize_saliency:
                     t = time.time()
                     visualize(env, state, policy)
@@ -270,26 +271,26 @@ def visualize(env, state, policy):
     #saliency /= saliency.max()
 
     blue_mask = np.ones_like(I)
-    blue_mask[:,:,2] = 255.
-    blue_mask[:, :, 1] = 120.
+    blue_mask[:, :, :] = (0,0,255)
 
     red_mask = np.ones_like(I)
-    red_mask[:, :, 0] = 255.
-    red_mask[:, :,1] = 120.
+    red_mask[:, :, :] = (255,0,0)
 
     saliency = (saliency.squeeze().data).numpy()[:,:,None]
     sign = (sign.squeeze().data).numpy()[:,:,None]
 
     global saliencies
-    saliencies += [saliency.max()]
-    if len(saliency) > 500:
+    saliencies += [np.max(saliency)]
+    if len(saliencies) > 1000:
         saliencies.pop(0)
 
-    saliency /= np.mean(saliencies)
 
-    thresh = 0
-    saliency  *= 1.0
-    saliency = 0.6 * (saliency.clip(thresh, 1.0) - thresh) / (1-thresh)
+    saliency = np.sqrt(saliency / np.percentile(saliencies, 75))
+    #saliency = saliency / max(0.001, np.max(saliency))
+
+    thresh = 0.1
+    saliency *= 1
+    saliency = 0.7 * (saliency.clip(thresh, 1.0) - thresh) / (1 - thresh)
 
     I =  np.where(sign > 0 , saliency * red_mask + (1.-saliency) * I, saliency * blue_mask + (1.-saliency) * I)
 
@@ -355,8 +356,6 @@ if __name__ == '__main__':
                                   logging.StreamHandler()])
     logger = logging.getLogger(run_id)
 
-    saliencies = []
-
     # parameters
     seed = 42
     torch.manual_seed(seed)
@@ -384,7 +383,10 @@ if __name__ == '__main__':
     else:
         env = gym.make(env_id)
         #env = make_env(env)
-        env = ptan.common.wrappers.wrap_dqn(env)
+        if not opt.evaluate:
+            env = ptan.common.wrappers.wrap_dqn(env)
+        else:
+            env = ptan.common.wrappers.wrap_dqn(env, episodic_life = False, reward_clipping = False)
         RAM = False
 
     N_ACTIONS = env.action_space.n
@@ -392,6 +394,13 @@ if __name__ == '__main__':
     # human mode
     if HUMAN:
         RENDER = True
+
+        saliencies = []
+
+        ACTIONS = env.get_action_meanings()
+
+        print(ACTIONS)
+
         from pyglet.window import key as KEY
 
         SKIP_CONTROL = 0  # Use previous control decision SKIP_CONTROL times, that's how you
@@ -399,26 +408,31 @@ if __name__ == '__main__':
 
         human_agent_action = 0
         human_wants_restart = False
-        human_sets_pause = False
-        visualize_saliency = False
+        human_sets_pause = True
+        human_fast_forward = False
+        visualize_saliency = True
+
+        saliency_average = None
 
 
         def key_press(key, mod):
-            global human_agent_action, human_wants_restart, human_sets_pause, visualize_saliency
+            global human_agent_action, human_wants_restart, human_sets_pause, visualize_saliency, human_fast_forward
             if key == 0xff0d: human_wants_restart = True
             if key == 32: human_sets_pause = not human_sets_pause
-            if key == KEY.S: visualize_saliency = not visualize_saliency
+            if key == KEY.ENTER: visualize_saliency = not visualize_saliency
+            if key == KEY.F: human_fast_forward = not human_fast_forward
 
-            if key == KEY.LEFT:  human_agent_action = 0
-            if key == KEY.RIGHT: human_agent_action = 2
-            if key == KEY.UP:    human_agent_action = 4
-            if key == KEY.DOWN:  human_agent_action = 3
 
+            if key == KEY.A:  human_agent_action = ACTIONS.index('LEFT')
+            if key == KEY.D:  human_agent_action = ACTIONS.index('RIGHT')
+            if key == KEY.W:  human_agent_action = ACTIONS.index('FIRE')
+            if key == KEY.Q:  human_agent_action = ACTIONS.index('RIGHTFIRE')
+            if key == KEY.E:  human_agent_action = ACTIONS.index('LEFTFIRE')
 
 
         def key_release(key, mod):
             global human_agent_action
-            human_agent_action = 1
+            human_agent_action = ACTIONS.index('NOOP')
 
 
         env.render()
