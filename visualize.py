@@ -93,7 +93,7 @@ def generate_candidate_frames(img, spacing = 6, sigma = 9, blur_sigma = 15, cont
     return outputs, masks
 
 
-def saliency_map(state, policy, output_shape, spacing=5, sigma=6, blur_sigma=9, contrast=1.5, downsample=5, use_mode=True):
+def saliency_map(state, policy, output_shape, spacing=6, sigma=6, blur_sigma=9, contrast=1.5, downsample=6, use_mode=True):
 
     state = state.float()
 

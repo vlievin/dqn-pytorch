@@ -101,7 +101,7 @@ class DDQNbn(torch.jit.ScriptModule):
         x = self.convs(x)
         x = x.view(x.size(0), -1)
 
-        return self.fc_adv(x)
+        return self.fc_val(x)
 
 
 class LanderDQN(torch.jit.ScriptModule):

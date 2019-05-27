@@ -289,7 +289,7 @@ def visualize(env, state, policy):
     #saliency = saliency / max(0.001, np.max(saliency))
 
     thresh = 0.1
-    saliency *= 1
+    saliency *= 1.5
     saliency = 0.7 * (saliency.clip(thresh, 1.0) - thresh) / (1 - thresh)
 
     I =  np.where(sign > 0 , saliency * red_mask + (1.-saliency) * I, saliency * blue_mask + (1.-saliency) * I)
@@ -410,7 +410,7 @@ if __name__ == '__main__':
         human_wants_restart = False
         human_sets_pause = True
         human_fast_forward = False
-        visualize_saliency = True
+        visualize_saliency = False
 
         saliency_average = None
 
@@ -451,6 +451,8 @@ if __name__ == '__main__':
         MODEL = DDQNbn if opt.dueling else DQNbn
         policy_net = MODEL(n_actions=N_ACTIONS).to(device)
         target_net = MODEL(n_actions=N_ACTIONS).to(device)
+
+    print(policy_net)
 
     target_net.load_state_dict(policy_net.state_dict())
 

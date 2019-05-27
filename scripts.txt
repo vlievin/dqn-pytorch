@@ -1,3 +1,12 @@
 
 # lunar env
- python main.py --env lunar --version 6 --lr 1e-3 --memory_size=50000 --initial_memory_size=1000 --log_freq=10 --evaluate --human
+python main.py --env lunar --version 6 --lr 1e-3 --memory_size=50000 --initial_memory_size=1000 --log_freq=10 --evaluate --human
+
+# Space Invaders
+python main.py --evaluate --human --dueling --env SpaceInvaders --version final2 --memory_size=300000 --play_steps=4
+
+# Breakout
+python main.py --evaluate --human --dueling --env Breakout --version final2 --memory_size=300000 --play_steps=4
+
+# Pong
+python main.py --evaluate --human --dueling --env Pong --version final3 --memory_size=100000 --play_steps=4
