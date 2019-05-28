@@ -143,7 +143,7 @@ if __name__ == '__main__':
     N_ACTIONS = env.action_space.n
 
     # create networks
-    policy_net = DQNbn(n_actions=N_ACTIONS).to(device)
+    policy_net = DQN(n_actions=N_ACTIONS).to(device)
 
 
     steps_done = 0

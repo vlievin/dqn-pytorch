@@ -1,29 +1,24 @@
-import copy
-import os
-from collections import namedtuple, Counter
-from itertools import count
-import math
-import random
-import numpy as np
-import time
-import logging
 import argparse
-from tqdm import tqdm
-import torch.multiprocessing as mp
+import json
+import logging
+import os
+import numpy as np
+import random
+import time
+from collections import namedtuple
+from itertools import count
 
 import gym
-from gym import wrappers
 import ptan
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from tqdm import tqdm
 
-from wrappers import *
+from lunar_lander import LunarLander
 from memory import ReplayMemory
 from models import *
-from lunar_lander import LunarLander
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
+from visualize import *
 
 Transition = namedtuple('Transion', ('state', 'action', 'next_state', 'reward'))
 
@@ -31,12 +26,12 @@ Transition = namedtuple('Transion', ('state', 'action', 'next_state', 'reward'))
 def select_action(policy, state, epsilon):
     """
     select action folowing an epsilon greedy policy
-    :param state: current stae
+    :param policy: policy model
+    :param state: current state
+    :param epsilon: prob of sampling the model
     :return: action as a long tensor
     """
     policy.eval()
-
-    # policy
     sample = random.random()
     if sample > epsilon:
         with torch.no_grad():
@@ -46,7 +41,7 @@ def select_action(policy, state, epsilon):
 
 
 def update_epsilon(steps_done):
-    # epsilon decay
+    """exponential decay"""
     if steps_done > EPS_OFFSET:
         epsilon = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * (steps_done - EPS_OFFSET) / (EPS_DECAY + EPS_OFFSET))
     else:
@@ -54,27 +49,32 @@ def update_epsilon(steps_done):
 
     return epsilon
 
+
 def sample_memory(memory, device, non_blocking=False):
     # sample replay buffer
     transitions = memory.sample(BATCH_SIZE)
     batch = Transition(*zip(*transitions))
 
     # convert to tensors and create batches
-    actions = batch.action
-    rewards = batch.reward
-
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=device, dtype=torch.uint8)
-    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None]).to(device, non_blocking=non_blocking)
+    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=device,
+                                  dtype=torch.uint8)
+    non_final_next_states = torch.cat([s for s in batch.next_state if s is not None]).to(device,
+                                                                                         non_blocking=non_blocking)
     state_batch = torch.cat(batch.state).to(device, non_blocking=non_blocking)
-    action_batch = torch.cat(actions).to(device, non_blocking=non_blocking)
-    reward_batch = torch.cat(rewards).to(device, non_blocking=non_blocking)
+    action_batch = torch.cat(batch.action).to(device, non_blocking=non_blocking)
+    reward_batch = torch.cat(batch.reward).to(device, non_blocking=non_blocking)
 
     return state_batch, action_batch, reward_batch, non_final_mask, non_final_next_states
 
 
-def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=False):
+def optimize_model(policy_net, target_net, memory, batch=None, use_double_dqn=False):
     """
-    optimize policy
+    Optimize policy following the DQN objective or Double DQN objective.
+
+    :param policy_net: policy model
+    :param target_net: target policy model updated every
+    :param memory: Replay memory
+    :param batch: batch to use (sample memory if None)
     :param use_double_dqn: use double DQN
     :return: None
     """
@@ -115,7 +115,7 @@ def optimize_model(policy_net, target_net, memory, batch = None, use_double_dqn=
     optimizer.step()
 
 
-def get_state(obs):
+def preprocess_obs(obs):
     """
     create state tensor from observation
     :param obs: observation from the environment
@@ -130,7 +130,11 @@ def get_state(obs):
 
 def train(env, policy_net, target_net, memory, max_frames, render=False, double_dqn=False):
     """
-    train the policy model for n_episodes
+    train the policy model for `max_frames`frames using a replay memory and the target model.
+    Update the target model every `TARGET_SYNC`frames.
+    Log every `LOG_FREQ`steps.
+
+
     :param env: gym environment
     :param max_frames: number of frames
     :param render: if True, renders the environment
@@ -143,12 +147,13 @@ def train(env, policy_net, target_net, memory, max_frames, render=False, double_
     with tqdm(total=max_frames) as pbar:
         for episode in count():
             obs = env.reset()
-            state = get_state(obs).to(device, non_blocking=True)
+            state = preprocess_obs(obs).to(device, non_blocking=True)
             total_reward = 0.
             elaps = time.time()
             frames = 0
             total_opt_time = 0.
             batch = None
+
             for t in count():
 
                 epsilon = update_epsilon(steps_done)
@@ -166,7 +171,7 @@ def train(env, policy_net, target_net, memory, max_frames, render=False, double_
                 total_reward += reward
 
                 if not done:
-                    next_state = get_state(obs).to(device, non_blocking=True)
+                    next_state = preprocess_obs(obs).to(device, non_blocking=True)
                 else:
                     next_state = None
 
@@ -184,7 +189,7 @@ def train(env, policy_net, target_net, memory, max_frames, render=False, double_
                         total_opt_time += time.time() - opt_time
                         batch = sample_memory(memory, device, non_blocking=True)
 
-                    if steps_done % TARGET_UPDATE == 0:
+                    if steps_done % TARGET_SYNC == 0:
                         target_net.load_state_dict(policy_net.state_dict())
 
                 if iters > 500:
@@ -200,38 +205,49 @@ def train(env, policy_net, target_net, memory, max_frames, render=False, double_
                 elaps = (time.time() - elaps)
                 frames_seconds = frames / elaps
                 logger.info(
-                    f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f} ({np.std(rewards):.2f})')
+                    f'Total steps: {steps_done}   Episode: {episode}/{t}   Epsilon {epsilon:.3f}   Fps {frames_seconds:.3f}   '
+                    f'Time ({elaps:.3f} / {total_opt_time:.3f})   Total reward: {np.mean(rewards):.2f} ({np.std(rewards):.2f})')
                 rewards = []
-                
+
             if steps_done > max_frames:
                 break
+
     env.close()
-    return
 
 
 def test(env, n_episodes, policy, logdir, render=True):
+    """
+    Test the policy for `n_episodes``
+    Render saliency if `visualize_saliency` and `render`.
+
+    :param env: gym environement
+    :param n_episodes: numer of episodes to play
+    :param policy: policy model
+    :param logdir: directory where to log video
+    :param render: render frames
+    """
+
     policy.eval()
 
-    #env = gym.wrappers.Monitor(env, logdir, force=True)
+    # env = gym.wrappers.Monitor(env, logdir, force=True)
     for episode in range(n_episodes):
         obs = env.reset()
-        state = get_state(obs)
+        state = preprocess_obs(obs)
         total_reward = 0.0
         for t in count():
             action = policy(state.to(device)).max(1)[1].view(1, 1)
 
             if HUMAN:
-                if not human_sets_pause:
-                    action = human_agent_action
-                    #print(ACTIONS[action])
+                if not _human_sets_pause:
+                    action = _human_agent_action
                 else:
                     pass
 
             if render:
-                _wait_time = 0.1 if not human_fast_forward else 0.01
-                if visualize_saliency:
+                _wait_time = 0.1 if not _human_fast_forward else 0.01
+                if _human_saliency:
                     t = time.time()
-                    visualize(env, state, policy)
+                    render_saliency(env, state, policy)
                     run_time = time.time() - t
                     if run_time < _wait_time:
                         time.sleep(_wait_time - run_time)
@@ -244,7 +260,7 @@ def test(env, n_episodes, policy, logdir, render=True):
             total_reward += reward
 
             if not done:
-                next_state = get_state(obs)
+                next_state = preprocess_obs(obs)
             else:
                 next_state = None
 
@@ -255,62 +271,62 @@ def test(env, n_episodes, policy, logdir, render=True):
                 break
 
     env.close()
-    return
 
 
-from visualize import *
+def render_saliency(env, state, policy):
+    """
+    Visualize saliency on top of the environement frame.
 
-def visualize(env, state, policy):
+    :param env:
+    :param state:
+    :param policy:
+    """
 
+    # get frame
     I = env.ale.getScreenRGB2().astype(np.float32)
 
+    # compute saliency
     saliency, sign = saliency_map(state, policy, I.shape[:2])
 
-    #smax = saliency.max()
-    #saliency -= saliency.min()
-    #saliency /= saliency.max()
-
+    # red and blue masks
     blue_mask = np.ones_like(I)
-    blue_mask[:, :, :] = (0,0,255)
-
+    blue_mask[:, :, :] = (0, 0, 255)
     red_mask = np.ones_like(I)
-    red_mask[:, :, :] = (255,0,0)
+    red_mask[:, :, :] = (255, 0, 0)
 
-    saliency = (saliency.squeeze().data).numpy()[:,:,None]
-    sign = (sign.squeeze().data).numpy()[:,:,None]
+    # post processing + normalize
+    saliency = (saliency.squeeze().data).numpy()[:, :, None]
+    sign = (sign.squeeze().data).numpy()[:, :, None]
 
-    global saliencies
-    saliencies += [np.max(saliency)]
-    if len(saliencies) > 1000:
-        saliencies.pop(0)
+    global _saliencies
+    _saliencies += [np.max(saliency)]
+    if len(_saliencies) > 1000:
+        _saliencies.pop(0)
 
+    saliency = np.sqrt(saliency / np.percentile(_saliencies, 75))
 
-    saliency = np.sqrt(saliency / np.percentile(saliencies, 75))
-    #saliency = saliency / max(0.001, np.max(saliency))
-
-    thresh = 0.1
-    saliency *= 1.5
+    thresh = 0.0
+    saliency *= 3.0
     saliency = 0.7 * (saliency.clip(thresh, 1.0) - thresh) / (1 - thresh)
 
-    I =  np.where(sign > 0 , saliency * red_mask + (1.-saliency) * I, saliency * blue_mask + (1.-saliency) * I)
+    # apply masks
+    I = np.where(sign > 0, saliency * red_mask + (1. - saliency) * I, saliency * blue_mask + (1. - saliency) * I)
 
-    #I[:,:, 2] += (5. * saliency).astype(I.dtype)
-
+    # render
     I = I.clip(1, 255).astype('uint8')
-
     env.viewer.imshow(I)
-
 
 
 if __name__ == '__main__':
     """
-    train and/or evaluate an agent. 
-    You can play Atari yourself usingthe flags --render --human 
-    (use arrow keys to control the agent and space bar to gives control to the agent) 
+    Train and/or evaluate an agen on a Gym environment. 
+    
+    You can play Atari yourself using the flags --render --human 
+    (Use SPACE to take control, use keys A,S,D,Q,W,D to control the agent and press ENTER to display saliency) 
     """
 
-
     parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--root', type=str, default='logs/', help='log directory')
     parser.add_argument('--version', default='final4', help='version')
     parser.add_argument('--env', default="Pong", help='gym env')
@@ -322,7 +338,7 @@ if __name__ == '__main__':
     parser.add_argument('--initial_memory_size', type=int, default='100000', help='initial memory size')
     parser.add_argument('--epsilon_decay', type=int, default='1000000', help='number of steps to decrease epsilon')
     parser.add_argument('--min_epsilon', type=float, default=0.1, help='minimum epsilon')
-    parser.add_argument('--play_steps', type=int, default=1, help='number of playing steps without optimization')
+    parser.add_argument('--play_steps', type=int, default=4, help='number of playing steps without optimization')
     parser.add_argument('--sync_freq', type=int, default='10000', help='number of episodes before each target update')
     parser.add_argument('--double', action='store_true', help='use double DQN')
     parser.add_argument('--dueling', action='store_true', help='use dueling DQN')
@@ -330,23 +346,27 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--render', action='store_true', help='render environment')
     parser.add_argument('--evaluate', action='store_true', help='evalaute trained model')
-    parser.add_argument('--human', action='store_true', help='play yourself (press SPACE bar to give control to the agent, press S to display saliency)')
+    parser.add_argument('--human', action='store_true',
+                        help='play yourself (press SPACE bar to give control to the agent, press S to display saliency)')
 
     opt = parser.parse_args()
 
     env_id = f"{opt.env}{opt.env_version}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(env_id, "\nDEVICE:", device, "\n")
 
     if not os.path.exists(opt.root):
         os.makedirs(opt.root)
+
+    with open(f"{opt.root}/{env_id}.json", "w") as f:
+        json = json.dumps(vars(opt))
+        f.write(json)
 
     # define unique id
     model_id = 'DDQN' if opt.dueling else 'DQN'
     if opt.double:
         model_id = 'Double' + model_id
-    run_id = f"{model_id}-{env_id}-version-{opt.version}-{opt.batch_size}-{opt.gamma}-{opt.lr}-{opt.play_steps}-{opt.memory_size}"
+    run_id = f"{model_id}-{env_id}-version-{opt.version}"
 
     # logging
     logging.basicConfig(level=logging.INFO,
@@ -357,7 +377,7 @@ if __name__ == '__main__':
     logger = logging.getLogger(run_id)
 
     # parameters
-    seed = 42
+    seed = opt.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     BATCH_SIZE = opt.batch_size * opt.play_steps
@@ -366,11 +386,11 @@ if __name__ == '__main__':
     EPS_END = opt.min_epsilon
     EPS_DECAY = opt.epsilon_decay
     EPS_OFFSET = opt.initial_memory_size
-    TARGET_UPDATE = opt.sync_freq
+    TARGET_SYNC = opt.sync_freq
     LOG_FREQ = opt.log_freq
     RENDER = opt.render
     MAX_FRAMES = opt.frames
-    lr = opt.lr
+    LR = opt.lr
     INITIAL_MEMORY = opt.initial_memory_size
     MEMORY_SIZE = opt.memory_size
     PLAY_STEPS = opt.play_steps
@@ -382,20 +402,19 @@ if __name__ == '__main__':
         RAM = True
     else:
         env = gym.make(env_id)
-        #env = make_env(env)
         if not opt.evaluate:
             env = ptan.common.wrappers.wrap_dqn(env)
         else:
-            env = ptan.common.wrappers.wrap_dqn(env, episodic_life = False, reward_clipping = False)
+            env = ptan.common.wrappers.wrap_dqn(env, episodic_life=False, reward_clipping=False)
         RAM = False
 
     N_ACTIONS = env.action_space.n
 
-    # human mode
+    # human control mode and saliency rendering
     if HUMAN:
         RENDER = True
 
-        saliencies = []
+        _saliencies = []
 
         ACTIONS = env.get_action_meanings()
 
@@ -403,36 +422,34 @@ if __name__ == '__main__':
 
         from pyglet.window import key as KEY
 
-        SKIP_CONTROL = 0  # Use previous control decision SKIP_CONTROL times, that's how you
-        # can test what skip is still usable.
+        # flags used to control human inputs.
+        _human_agent_action = 0
+        _human_wants_restart = False
+        _human_sets_pause = True
+        _human_fast_forward = False
+        _human_saliency = False
 
-        human_agent_action = 0
-        human_wants_restart = False
-        human_sets_pause = True
-        human_fast_forward = False
-        visualize_saliency = False
-
+        # store saliency maxes for normalization
         saliency_average = None
 
 
         def key_press(key, mod):
-            global human_agent_action, human_wants_restart, human_sets_pause, visualize_saliency, human_fast_forward
-            if key == 0xff0d: human_wants_restart = True
-            if key == 32: human_sets_pause = not human_sets_pause
-            if key == KEY.ENTER: visualize_saliency = not visualize_saliency
-            if key == KEY.F: human_fast_forward = not human_fast_forward
+            global _human_agent_action, _human_wants_restart, _human_sets_pause, _human_saliency, _human_fast_forward
+            if key == 0xff0d: _human_wants_restart = True
+            if key == 32: _human_sets_pause = not _human_sets_pause
+            if key == KEY.ENTER: _human_saliency = not _human_saliency
+            if key == KEY.F: _human_fast_forward = not _human_fast_forward
 
-
-            if key == KEY.A:  human_agent_action = ACTIONS.index('LEFT')
-            if key == KEY.D:  human_agent_action = ACTIONS.index('RIGHT')
-            if key == KEY.W:  human_agent_action = ACTIONS.index('FIRE')
-            if key == KEY.Q:  human_agent_action = ACTIONS.index('RIGHTFIRE')
-            if key == KEY.E:  human_agent_action = ACTIONS.index('LEFTFIRE')
+            if key == KEY.A:  _human_agent_action = ACTIONS.index('LEFT')
+            if key == KEY.D:  _human_agent_action = ACTIONS.index('RIGHT')
+            if key == KEY.W:  _human_agent_action = ACTIONS.index('FIRE')
+            if key == KEY.Q:  _human_agent_action = ACTIONS.index('RIGHTFIRE')
+            if key == KEY.E:  _human_agent_action = ACTIONS.index('LEFTFIRE')
 
 
         def key_release(key, mod):
-            global human_agent_action
-            human_agent_action = ACTIONS.index('NOOP')
+            global _human_agent_action
+            _human_agent_action = ACTIONS.index('NOOP')
 
 
         env.render()
@@ -448,17 +465,15 @@ if __name__ == '__main__':
         policy_net = MODEL(N_STATE, N_ACTIONS).to(device)
         target_net = MODEL(N_STATE, N_ACTIONS).to(device)
     else:
-        MODEL = DDQNbn if opt.dueling else DQNbn
+        MODEL = DDQN if opt.dueling else DQN
         policy_net = MODEL(n_actions=N_ACTIONS).to(device)
         target_net = MODEL(n_actions=N_ACTIONS).to(device)
 
-    print(policy_net)
-
+    # init target model
     target_net.load_state_dict(policy_net.state_dict())
 
     # setup optimizer
-    # optimizer = optim.Adam(policy_net.parameters(), lr=lr, betas=(0.9,0.98))
-    optimizer = optim.RMSprop(policy_net.parameters(), lr=lr)
+    optimizer = optim.RMSprop(policy_net.parameters(), lr=LR)
 
     # initialize replay memory
     memory = ReplayMemory(MEMORY_SIZE)
