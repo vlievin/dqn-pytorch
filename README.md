@@ -1,6 +1,6 @@
 # Explainable DQN PyTorch
 
-Implementation of the Deep Q-learning algorithm [1] on the Atari Pong environment with Saliency visualization [2]. Implementation of the Dueling arhcitecture [3] and the Double DQN [4].
+Implementation of the Deep Q-learning algorithm [1] on the Atari Pong environment with real-time saliency visualization [2]. Implementation of the Dueling arhcitecture [3] and the Double DQN [4].
 
 <img height="200" alt="Breakout" src="assets/breakout.gif"><img height="200" alt="Pong" src="assets/pong.gif"><img height="200" alt="Beam Rider" src="assets/beam.gif"><img height="200" alt="Assualt" src="assets/assault.gif">
 
